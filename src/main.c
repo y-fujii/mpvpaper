@@ -46,6 +46,7 @@ struct display_output {
     struct zwlr_layer_surface_v1 *layer_surface;
 
     uint32_t width, height;
+    uint32_t scale;
 
     struct wl_list link;
 };
@@ -129,8 +130,8 @@ static void render(struct display_output *output) {
     mpv_render_param render_params[] = {
         {MPV_RENDER_PARAM_OPENGL_FBO, &(mpv_opengl_fbo){
             .fbo = 0,
-            .w = output->width,
-            .h = output->height,
+            .w = output->width * output->scale,
+            .h = output->height * output->scale,
         }},
         // Flip rendering (needed due to flipped GL coordinate system).
         {MPV_RENDER_PARAM_FLIP_Y, &(int){1}},
@@ -494,8 +495,8 @@ static void init_mpv(struct display_output *output) {
 }
 
 static void init_egl(struct display_output *output) {
-
-    egl_window = wl_egl_window_create(output->surface, output->width, output->height);
+    wl_surface_set_buffer_scale(output->surface, output->scale);
+    egl_window = wl_egl_window_create(output->surface, output->width * output->scale, output->height * output->scale);
     if (!egl_display) {
         egl_display = eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, output->state->display, NULL);
         eglInitialize(egl_display, NULL, NULL);
@@ -549,7 +550,7 @@ static void init_egl(struct display_output *output) {
     gladLoadGLLoader((GLADloadproc) eglGetProcAddress);
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glViewport(0, 0, output->width, output->height);
+    glViewport(0, 0, output->width * output->scale, output->height * output->scale);
 }
 
 static void destroy_display_output(struct display_output *output) {
@@ -607,6 +608,31 @@ static void layer_surface_closed(void *data, struct zwlr_layer_surface_v1 *surfa
 static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
     .configure = layer_surface_configure,
     .closed = layer_surface_closed,
+};
+
+static void output_geometry(void *data, struct wl_output *output, int32_t x,
+        int32_t y, int32_t width_mm, int32_t height_mm, int32_t subpixel,
+        const char *make, const char *model, int32_t transform) {
+}
+
+static void output_mode(void *data, struct wl_output *output, uint32_t flags,
+        int32_t width, int32_t height, int32_t refresh) {
+}
+
+static void output_done(void *data, struct wl_output *output) {
+}
+
+static void output_scale(void *data, struct wl_output *wl_output,
+        int32_t scale) {
+    struct display_output *output = data;
+    output->scale = scale;
+}
+
+static const struct wl_output_listener output_listener = {
+    .geometry = output_geometry,
+    .mode = output_mode,
+    .done = output_done,
+    .scale = output_scale,
 };
 
 static void create_layer_surface(struct display_output *output) {
@@ -695,9 +721,11 @@ static void handle_global(void *data, struct wl_registry *registry,
         state->compositor = wl_registry_bind(registry, name, &wl_compositor_interface, 4);
     } else if (strcmp(interface, wl_output_interface.name) == 0) {
         struct display_output *output = calloc(1, sizeof(struct display_output));
+        output->scale = 1;
         output->state = state;
         output->wl_name = name;
         output->wl_output = wl_registry_bind(registry, name, &wl_output_interface, 3);
+        wl_output_add_listener(output->wl_output, &output_listener, output);
 
         wl_list_insert(&state->outputs, &output->link);
 
